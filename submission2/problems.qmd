@@ -1,6 +1,6 @@
 ---
 title: "ECON 470 Homework 5"
-subtitle: "Submission 1, Spring 2026"
+subtitle: "Submission 2, Spring 2026"
 author: "Srijon Sarkar"
 format:
   pdf:
