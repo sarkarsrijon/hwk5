@@ -1,0 +1,361 @@
+---
+title: "ECON 470 Homework 5"
+subtitle: "Submission 1, Spring 2026"
+author: "Srijon Sarkar"
+format:
+  pdf:
+    output-file: "sarkar-s-hwk5-1"
+    output-ext:  "pdf"
+    header-includes:
+      - \usepackage{float}
+      - \floatplacement{table}{H}
+---
+
+```{r}
+#| include: false
+
+# Preliminaries -----------------------------------------------------------
+if (!require("pacman")) install.packages("pacman")
+pacman::p_load(tidyverse, ggplot2, dplyr, lubridate, haven)
+
+library(knitr)
+library(kableExtra)
+
+
+hcris_kff <- read_csv("../data/output/hcris_kff.csv")
+```
+
+## Problem 1
+
+```{r}
+#| echo: false
+#| warning: false
+
+hcris.kff <- hcris_kff %>% 
+  mutate(
+    Year = year,
+    uncomp_care_m = uncomp_care / 1e6
+  )
+hcris.kff %>%
+  filter(Year >= 2010, Year <= 2018) %>%
+  group_by(Year) %>%
+  summarize(
+    Mean = mean(uncomp_care_m, na.rm = TRUE),
+    SD   = sd(uncomp_care_m,   na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  kable(
+    col.names = c("Year", "Mean ($M)", "Std. Dev. ($M)"),
+    digits    = 2,
+    booktabs  = TRUE,
+    row.names = FALSE,
+    caption   = "Uncompensated Care (\\$M), 2010--2018"
+  ) %>%
+  kable_styling(latex_options = c("hold_position", "striped")) %>%
+  column_spec(1, bold = TRUE) %>%
+  row_spec(0, bold = TRUE)
+```
+
+\newpage
+## Problem 2
+
+```{r}
+#| echo: false
+#| warning: false
+
+df <- hcris_kff %>% mutate(expansion_year = year(expansion_date), 
+                           uncomp_care_m = uncomp_care / 1e6)
+
+df_filtered <- df %>%
+  filter(
+    expansion_year == 2014 | is.na(expansion_year)   
+      # keep 2014 expanders + never-expanders
+  ) %>%
+  mutate(
+    group = if_else(expansion_year == 2014, "Expanded in 2014", "Never Expanded")
+  )
+
+df_summary <- df_filtered %>%
+  group_by(year, group) %>%
+  summarize(
+    mean_uc = mean(uncomp_care_m, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+ggplot(df_summary, aes(x = year, y = mean_uc, color = group)) +
+  geom_line(size = 1.2) +
+  geom_point(size = 2) +
+  labs(
+    title = "Mean Uncompensated Care Over Time",
+    subtitle = "2014 Medicaid Expansion States vs. Never-Expanders",
+    x = "Year",
+    y = "Uncompensated Care (Millions)",
+    color = "Group"
+  ) +
+  theme_minimal(base_size = 14)
+```
+
+\newpage
+## Problem 3
+
+```{r}
+#| echo: false
+#| warning: false
+
+df <- hcris_kff %>%
+  mutate(
+    expansion_year = year(expansion_date),
+    uncomp_care_m = uncomp_care / 1e6,
+    group = case_when(
+      expansion_year == 2014 ~ "Treatment",
+      is.na(expansion_year) ~ "Control"
+    )
+  ) %>%
+  filter(group %in% c("Treatment", "Control"))  # drop post-2014 expanders
+
+dd_table <- df %>%
+  filter(year %in% c(2012, 2015)) %>%
+  group_by(group, year) %>%
+  summarize(
+    mean_uc = mean(uncomp_care_m, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  tidyr::pivot_wider(
+    names_from = year,
+    values_from = mean_uc,
+    names_prefix = "Year_"
+  )
+
+dd_table %>%
+  mutate(
+    Difference = Year_2015 - Year_2012
+  ) %>%
+  kable(
+    col.names = c("Group", "2012 ($M)", "2015 ($M)", "Difference ($M)"),
+    digits    = 2,
+    booktabs  = TRUE,
+    row.names = FALSE,
+    caption   = "Difference-in-Differences: Mean Uncompensated Care (\\$M)"
+  ) %>%
+  kable_styling(latex_options = c("hold_position", "striped")) %>%
+  column_spec(1, bold = TRUE) %>%
+  row_spec(0, bold = TRUE)
+```
+
+\newpage
+## Problem 4
+
+The adoption of Medicaid leads to a decrease in uncompensated care, as observed. Thus, we expect this effect as it encourages hospitals to take Medicare patients and get compensation or partial support from the Medicare program, instead of outsourcing debt to manage or counter their listed charges to a third-party bank.
+
+\newpage
+# Estimate ATEs
+
+## Problem 5
+
+```{r}
+#| echo: false
+#| warning: false
+
+df_dd <- hcris_kff %>%
+  mutate(
+    expansion_year = year(expansion_date),
+    expand_ever    = if_else(!is.na(expansion_year), 1, 0),
+    uncomp_care_m  = uncomp_care / 1e6,
+    post           = if_else(year >= 2014, 1, 0),
+    treat          = post * expand_ever
+  ) %>%
+  filter(
+    expansion_year == 2014 | is.na(expansion_year)  # 2014 expanders + never-expanders
+  )
+
+model <- lm(uncomp_care_m ~ post + expand_ever + post * expand_ever, data = df_dd)
+
+coef_df <- as.data.frame(summary(model)$coefficients)
+coef_df$term <- c("Intercept", "Post 2014", "Ever Expanded", "Post x Ever Expanded (DiD)")
+coef_df <- coef_df[, c("term", "Estimate", "Std. Error", "t value", "Pr(>|t|)")]
+
+coef_df$`Pr(>|t|)` <- paste0(
+  formatC(coef_df$`Pr(>|t|)`, format = "e", digits = 2), " ",
+  symnum(coef_df$`Pr(>|t|)`, cutpoints = c(0, 0.01, 0.05, 0.1, 1), symbols = c("***", "**", "*", ""))
+)
+
+kable(
+  coef_df,
+  col.names = c("Term", "Estimate", "Std. Error", "t-Statistic", "p-Value"),
+  digits    = 3,
+  booktabs  = TRUE,
+  row.names = FALSE,
+  format.args = list(scientific = TRUE),
+  caption   = "DiD Estimates: Effect of Medicaid Expansion on Uncompensated Care (\\$M)"
+) %>%
+  kable_styling(latex_options = c("hold_position", "striped")) %>%
+  column_spec(1, bold = TRUE) %>%
+  row_spec(0, bold = TRUE) %>%
+  row_spec(4, bold = TRUE)
+```
+\newpage
+## Problem 6
+
+```{r}
+#| echo: false
+#| warning: false
+
+library(fixest)
+
+m.twfe <- feols(uncomp_care_m ~ treat | provider_number + year,
+                data = df_dd,
+                cluster = ~ state)
+
+coef_twfe <- as.data.frame(summary(m.twfe)$coeftable)
+coef_twfe$term <- "Treatment (DiD)"
+coef_twfe <- coef_twfe[, c("term", "Estimate", "Std. Error", "t value", "Pr(>|t|)")]
+
+coef_twfe$`Pr(>|t|)` <- paste0(
+  formatC(coef_twfe$`Pr(>|t|)`, format = "e", digits = 2), " ",
+  symnum(coef_twfe$`Pr(>|t|)`, cutpoints = c(0, 0.01, 0.05, 0.1, 1), symbols = c("***", "**", "*", ""))
+)
+
+kable(
+  coef_twfe,
+  col.names = c("Term", "Estimate", "Std. Error", "t-Statistic", "p-Value"),
+  digits    = 3,
+  booktabs  = TRUE,
+  row.names = FALSE,
+  format.args = list(scientific = TRUE),
+  caption   = "TWFE Estimates: Effect of Medicaid Expansion on Uncompensated Care (\\$M)"
+) %>%
+  kable_styling(latex_options = c("hold_position", "striped")) %>%
+  column_spec(1, bold = TRUE) %>%
+  row_spec(0, bold = TRUE)
+```
+
+We notice that both the estimators yield near about same magnitude of estimated effect around 48 to 52 millions of uncompensated care.
+
+\newpage
+## Problem 7
+
+```{r}
+#| echo: false
+#| warning: false
+
+df_dd2 <- hcris_kff %>%
+  mutate(
+    expansion_year = year(expansion_date),
+    expand_ever    = if_else(!is.na(expansion_year), 1, 0),
+    uncomp_care_m  = uncomp_care / 1e6,
+    post           = if_else(year >= 2014, 1, 0),
+    treat          = if_else(!is.na(expansion_year) & year >= expansion_year, 1, 0)
+  )
+
+model2 <- lm(uncomp_care_m ~ post + expand_ever + post * expand_ever, data = df_dd2)
+
+m.twfe2 <- feols(uncomp_care_m ~ treat | provider_number + year,
+                 data = df_dd2,
+                 cluster = ~ state)
+
+# --- OLS Table ---
+coef_ols2 <- as.data.frame(summary(model2)$coefficients)
+coef_ols2$term <- c("Intercept", "Post 2014", "Ever Expanded", "Post x Ever Expanded (DiD)")
+coef_ols2$`Pr(>|t|)` <- paste0(
+  formatC(coef_ols2$`Pr(>|t|)`, format = "e", digits = 2), " ",
+  symnum(coef_ols2$`Pr(>|t|)`, cutpoints = c(0, 0.01, 0.05, 0.1, 1), symbols = c("***", "**", "*", ""))
+)
+coef_ols2 <- coef_ols2[, c("term", "Estimate", "Std. Error", "t value", "Pr(>|t|)")]
+
+kable(
+  coef_ols2,
+  col.names = c("Term", "Estimate", "Std. Error", "t-Statistic", "p-Value"),
+  digits    = 3,
+  booktabs  = TRUE,
+  row.names = FALSE,
+  caption   = "OLS DiD: Effect of Medicaid Expansion on Uncompensated Care (\\$M), All States"
+) %>%
+  kable_styling(latex_options = c("hold_position", "striped")) %>%
+  column_spec(1, bold = TRUE) %>%
+  row_spec(0, bold = TRUE) %>%
+  row_spec(4, bold = TRUE) %>%
+  add_footnote("Signif. codes: *** p<0.01, ** p<0.05, * p<0.10", notation = "none")
+
+# --- TWFE Table ---
+coef_twfe2 <- as.data.frame(summary(m.twfe2)$coeftable)
+coef_twfe2$term <- "Treatment (DiD)"
+coef_twfe2$`Pr(>|t|)` <- paste0(
+  formatC(coef_twfe2$`Pr(>|t|)`, format = "e", digits = 2), " ",
+  symnum(coef_twfe2$`Pr(>|t|)`, cutpoints = c(0, 0.01, 0.05, 0.1, 1), symbols = c("***", "**", "*", ""))
+)
+coef_twfe2 <- coef_twfe2[, c("term", "Estimate", "Std. Error", "t value", "Pr(>|t|)")]
+
+kable(
+  coef_twfe2,
+  col.names = c("Term", "Estimate", "Std. Error", "t-Statistic", "p-Value"),
+  digits    = 3,
+  booktabs  = TRUE,
+  row.names = FALSE,
+  caption   = "TWFE: Effect of Medicaid Expansion on Uncompensated Care (\\$M), All States"
+) %>%
+  kable_styling(latex_options = c("hold_position", "striped")) %>%
+  column_spec(1, bold = TRUE) %>%
+  row_spec(0, bold = TRUE)
+```
+
+\newpage
+## Problem 8
+
+```{r}
+#| echo: false
+#| warning: false
+
+mod.twfe3 <- feols(uncomp_care_m ~ i(year, expand_ever, ref = 2013) | provider_number + year,
+                  cluster = ~ state,
+                  data = df_dd)
+
+iplot(mod.twfe3,
+      xlab = "Year",
+      ylab = "Effect on Uncomp Care (M$)",
+      main = "Event Study")
+```
+
+\newpage
+## Problem 9
+
+```{r}
+#| echo: false
+#| warning: false
+
+df_dd3 <- hcris_kff %>%
+  mutate(
+    expansion_year = year(expansion_date),
+    expand_ever    = if_else(!is.na(expansion_year), 1, 0),
+    uncomp_care_m  = uncomp_care / 1e6,
+    # time relative to EACH STATE'S expansion year
+    event_time     = year - expansion_year
+    # never-expanders get NA here
+  )
+
+df_dd3 <- df_dd3 %>%
+  mutate(
+    event_time = case_when(
+      is.na(expansion_year) ~ -1,   # never-expanders coded as "always pre"
+      event_time < -4 ~ -4,          # bin anything beyond -4 into -4
+      event_time > 4  ~  4,          # bin anything beyond +4 into +4
+      TRUE ~ event_time
+    )
+  )
+
+mod.twfe4 <- feols(
+  uncomp_care_m ~ i(event_time, expand_ever, ref = -1) | provider_number + year,
+  cluster = ~ state,
+  data = df_dd3
+)
+
+iplot(mod.twfe4,
+      xlab = "Year",
+      ylab = "Effect on Uncomp Care (M$)",
+      main = "Event Study (>= 2014)")
+```
+
+\newpage
+## Problem 10
+
+Medicaid expansion leads to a decrease in uncompensated care for hospitals in states that have adopted the change in policy. The event study graph is concerning because the bars for pre-treatment inch away from the zero margin, showing a violation of the parallel trends assumption. One primary limitation of the TWFE estimator is its biased nature in the context of staggered Medicaid expansion, as it doesn't take into acccount uncha
+
