@@ -1,1 +1,1 @@
-hello there
+Here, we continue our work with hospital cost report data and Medicaid expansion information to study the effect of Medicaid expansion on hospital uncompensated care, which we integrate with the Medicaid expansion dates by state from the Kaiser Family Foundation. The methods of Difference in Differences (DiD) were used throughout, along with Two-Way Fixed Effects (TWFE) and Event Studies to estimate ATEs here.
